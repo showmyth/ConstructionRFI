@@ -50,4 +50,12 @@ alembic.ini
 !storage/temp/.gitkeep
 
 #Ignore Redis Dump
+<<<<<<< HEAD
 dump.rdb
+=======
+dump.rdb
+tests/
+
+# Ignore model weights 
+*.pt
+>>>>>>> upstream/main
