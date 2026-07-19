@@ -28,3 +28,11 @@ class AssetProcessingState(str, Enum):
     READY = "READY"
     PARTIAL_READY = "PARTIAL_READY"
     FAILED = "FAILED"
+
+class StateStatus(str, Enum):
+    UPLOADED = "UPLOADED"
+    INGESTED = "INGESTED"
+    PROCESSING = "PROCESSING"
+    SERVICE_COMPLETE = "SERVICE_COMPLETE"
+    CHUNKED = "CHUNKED"
+    FAILED = "FAILED"
