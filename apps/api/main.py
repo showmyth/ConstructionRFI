@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from uuid import uuid4
-from apps.api.routes import upload
+from apps.api.routes import upload, graphs
 
 
 # setting up logging
@@ -50,6 +50,7 @@ def health_check():
 
 # 2. check upload (routes/upload.py)'
 app.include_router(upload.router)
+app.include_router(graphs.router)
 
 # 3. check job status (let job_id:str -> 'status' =/!= 'processing')
 @app.get("/job/{job_id}")
