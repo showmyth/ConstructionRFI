@@ -5,21 +5,25 @@ from datetime import datetime, UTC
 from packages.shared_schemas.graph import ContextGraph, GraphMetadata, GraphNode, GraphEdge, Provenance
 from packages.shared_schemas.observation import Observation
 from .resolver import EntityResolver
+from .repository import GraphRepository, MemoryGraphRepository
+
 
 class ContextGraphEngine:
-    def __init__(self):
-        self._active_sessions: Dict[str, ContextGraph] = {}
-        self.resolver = EntityResolver()  # Instantiate the resolver
+    def __init__(self, repository: Optional[GraphRepository] = None):
+        # Inject the repository, default to memory for ease of testing
+        self.repository = repository or MemoryGraphRepository()
+        self.resolver = EntityResolver()
 
     def create_graph(self, session_id: str) -> ContextGraph:
-        if session_id in self._active_sessions:
+        if self.repository.get_graph(session_id):
             raise ValueError(f"Session {session_id} already exists.")
+        
         new_graph = ContextGraph(metadata=GraphMetadata(session_id=session_id))
-        self._active_sessions[session_id] = new_graph
+        self.repository.save_graph(new_graph)
         return new_graph
 
     def get_graph(self, session_id: str) -> Optional[ContextGraph]:
-        return self._active_sessions.get(session_id)
+        return self.repository.get_graph(session_id)
 
     def add_observation(self, session_id: str, observation: Observation) -> ContextGraph:
         graph = self.get_graph(session_id)
@@ -30,15 +34,12 @@ class ContextGraphEngine:
 
         # --- 1. RESOLVE OR CREATE NODES ---
         for obs_node in observation.nodes:
-            # Check if this entity already exists in the graph
             existing_uuid = self.resolver.find_existing_node(graph, obs_node)
 
             if existing_uuid:
-                # MERGE: The entity exists! Accumulate knowledge on the single node.
                 self.resolver.merge_node(graph.nodes[existing_uuid], obs_node, observation)
                 id_mapping[obs_node.local_id] = existing_uuid
             else:
-                # CREATE: It's a brand new entity.
                 canonical_id = uuid4()
                 id_mapping[obs_node.local_id] = canonical_id
 
@@ -67,7 +68,6 @@ class ContextGraphEngine:
             if not source_uuid or not target_uuid:
                 continue 
 
-            # Check if this exact relationship already exists between these two nodes
             existing_edge = next(
                 (e for e in graph.edges 
                  if e.source == source_uuid 
@@ -84,11 +84,9 @@ class ContextGraphEngine:
             )
 
             if existing_edge:
-                # MERGE: Just append the provenance to show we observed this relationship again
                 existing_edge.provenance_history.append(new_prov)
                 existing_edge.updated_at = datetime.now(UTC)
             else:
-                # CREATE: New spatial or logical relationship discovered
                 graph_edge = GraphEdge(
                     source=source_uuid,
                     target=target_uuid,
@@ -99,4 +97,8 @@ class ContextGraphEngine:
                 graph.metadata.total_edges += 1
 
         graph.metadata.version += 1
+        
+        # --- 3. PERSIST CHANGES ---
+        self.repository.save_graph(graph)
+        
         return graph
