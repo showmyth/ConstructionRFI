@@ -1,56 +1,60 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, Protocol
 
 from packages.shared_schemas.enums import StateStatus
 from packages.shared_schemas.state_schema import StateSchema
 
 
-class StateKeeper:
-    """Simple in-memory state container for asset lifecycle tracking."""
+# define an Object which resembles a typical Asset object, but with only the fields that are mandatorily required for initialization
+class AssetLike(Protocol):
+    id: str
+    original_filename: str
+    content_type: str
+    stored_path: str
 
+
+class StateKeeper:
+    """State Container for Asset Lifecycle Tracking."""
     def __init__(self) -> None:
         self._states: dict[str, StateSchema] = {}
 
-    def init_state(
-        self,
-        asset_id: str,
-        *,
-        filename: str | None = None,
-        content_type: str | None = None,
-        final_path: str | None = None,
-        correlation_id: str | None = None,
-        status: StateStatus = StateStatus.UPLOADED,
-    ) -> StateSchema:
-        """Create a new state record for an asset if one does not exist."""
-        if asset_id in self._states:
-            state = self._states[asset_id]
-
-            if filename is not None and state.filename is None:
-                state.filename = filename
-            if content_type is not None and state.content_type is None:
-                state.content_type = content_type
-            if final_path is not None and state.final_path is None:
-                state.final_path = final_path
-            if correlation_id is not None and state.correlation_id is None:
-                state.correlation_id = correlation_id
-
-            return state
+    def init_state(self, asset: AssetLike, correlation_id: str | None = None) -> StateSchema:
+        """Create a new state record for an asset if one does not exist.
+        Args:
+            asset: Corresponding asset obtained from the Database
+            correlation_id: an unique identifier tracing a specific transaction/set of events
+        Returns:
+            StateSchema: Returns a dict of shape:
+                {
+                    asset_id,
+                    filename,
+                    content_type,
+                    final_path,
+                    correlation_id,
+                    status
+                }
+        """
+        if asset.id in self._states:
+            return self._states[asset.id]
 
         state = StateSchema(
-            asset_id=asset_id,
-            filename=filename,
-            content_type=content_type,
-            final_path=final_path,
+            asset_id=asset.id,
+            filename=asset.original_filename,
+            content_type=asset.content_type,
+            final_path=asset.stored_path,
             correlation_id=correlation_id,
-            status=status,
+            status=StateStatus.UPLOADED,
         )
-        self._states[asset_id] = state
+        self._states[asset.id] = state
         return state
 
     def get_state(self, asset_id: str) -> StateSchema | None:
-        """Retrieve the current state for an asset."""
+        """Retrieves the current state for the input asset.
+        Args:
+        
+        """
         return self._states.get(asset_id)
 
     def update_status(self, asset_id: str, status: StateStatus) -> StateSchema:
@@ -74,7 +78,7 @@ class StateKeeper:
 
     def _ensure_state(self, asset_id: str) -> StateSchema:
         if asset_id not in self._states:
-            return self.init_state(asset_id)
+            raise KeyError(f"No state initialized for asset {asset_id}")
         return self._states[asset_id]
 
     def snapshot(self, asset_id: str) -> dict[str, Any]:
@@ -82,4 +86,4 @@ class StateKeeper:
         state = self.get_state(asset_id)
         if state is None:
             return {}
-        return state.model_dump()
+        return state.model_dump(mode="json")
