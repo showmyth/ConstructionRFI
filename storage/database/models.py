@@ -6,6 +6,7 @@ from sqlalchemy import String, Text, JSON, DateTime, Integer # content-types
 from sqlalchemy import Enum, ForeignKey # for schema
 from sqlalchemy.orm import Mapped, mapped_column
 
+from packages.shared_schemas.enums import StateStatus
 from storage.database.connect import Base
 
 class ProcessingStatus(str, enum.Enum):
@@ -113,3 +114,33 @@ class AssetOutput(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.now
     )
+
+
+class StateRecord(Base):
+    __tablename__ = "state_records"
+
+    asset_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("assets.id"),
+        primary_key=True,
+    )
+
+    filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    final_path: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.now,
+        nullable=False,
+    )
+
+    status: Mapped[StateStatus] = mapped_column(
+        Enum(StateStatus, name="statestatus"),
+        nullable=False,
+        default=StateStatus.UPLOADED,
+    )
+
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    findings: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    errors: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

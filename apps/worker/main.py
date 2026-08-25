@@ -1,14 +1,10 @@
 import os
 import asyncio
-
-from pathlib import Path
-from celery import Celery
 import logging
 
 from pathlib import Path
 from celery import Celery
 from celery.signals import setup_logging
-from sqlalchemy.ext.asyncio import AsyncSession
 
 # MODELS
 from services.ocr.recognition import extract_from_media # OCR model
@@ -16,20 +12,14 @@ from services.speech.whisper import transcribe_audio
 from services.vision.detector import run_detection # Vision model
 from services.vision.observation import build_observation_state
 
+from packages.shared_schemas.state_schema import StateSchema
 from packages.shared_schemas.worker_input import WorkerInput
 
-from storage.database.connect import engine, AsyncSessionLocal
-from storage.database.models import Asset, AssetOutput, ExtractedContent, ContentChunk, ProcessingStatus
+from storage.database.connect import AsyncSessionLocal
+from storage.database.models import Asset, AssetOutput, ExtractedContent, ContentChunk, ProcessingStatus, StateRecord
 
-# chunking and cleaning
 from services.cleaning.cleaner import clean_extracted_text
 from services.chunking.chunker import build_chunks
-
-from services.ocr.recognition import extract_from_media
-from packages.shared_schemas import asset
-
-from storage.database.connect import AsyncSessionLocal
-from storage.database.models import Asset, ExtractedContent, ProcessingStatus
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 celery_app = Celery("rfi_worker", broker=REDIS_URL, backend=REDIS_URL)
@@ -44,8 +34,6 @@ celery_app.conf.update(
     worker_hijack_root_logger=False,
 )
 
-# Set up logger
-import logging
 LOG_PATH = Path("logs/app.log")
 
 
@@ -66,6 +54,49 @@ def configure_worker_logging(*args, **kwargs):
 logger = logging.getLogger(__name__)
 
 # --- ASYNC DB LOGIC ---
+
+async def persist_state_async(state_payload: dict):
+    """Persist a StateKeeper snapshot to the database."""
+    state = StateSchema.model_validate(state_payload)
+
+    async with AsyncSessionLocal() as db:
+        record = await db.get(StateRecord, state.asset_id)
+
+        if record is None:
+            record = StateRecord(asset_id=state.asset_id)
+            db.add(record)
+
+        record.filename = state.filename
+        record.content_type = state.content_type
+        record.final_path = state.final_path
+        record.created_at = state.created_at
+        record.status = state.status
+        record.correlation_id = state.correlation_id
+        record.findings = state.findings
+        record.errors = state.errors
+
+        await db.commit()
+        return state.asset_id
+
+
+async def load_state_async(asset_id: str) -> dict | None:
+    """Load a persisted state snapshot from the database."""
+    async with AsyncSessionLocal() as db:
+        record = await db.get(StateRecord, asset_id)
+        if record is None:
+            return None
+
+        return StateSchema(
+            asset_id=record.asset_id,
+            filename=record.filename,
+            content_type=record.content_type,
+            final_path=record.final_path,
+            created_at=record.created_at,
+            status=record.status,
+            correlation_id=record.correlation_id,
+            findings=record.findings or {},
+            errors=record.errors or [],
+        ).model_dump(mode="json")
 
 async def process_asset_async(worker_input: WorkerInput):
 
@@ -204,6 +235,29 @@ def process_asset_task(self, payload: dict):
     except Exception as exc:
         # Let Celery handle retries gracefully
         logger.error(f"[{worker_input.correlation_id}] Error in process_asset_task: {exc}")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(bind=True, max_retries=3)
+def persist_state_task(self, state_payload: dict):
+    """Celery task to persist a StateKeeper snapshot."""
+    try:
+        return asyncio.run(persist_state_async(state_payload))
+
+    except Exception as exc:
+        asset_id = state_payload.get("asset_id", "unknown")
+        logger.error(f"[{asset_id}] Error in persist_state_task: {exc}")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(bind=True, max_retries=3)
+def load_state_task(self, asset_id: str):
+    """Celery task to load a persisted StateKeeper snapshot."""
+    try:
+        return asyncio.run(load_state_async(asset_id))
+
+    except Exception as exc:
+        logger.error(f"[{asset_id}] Error in load_state_task: {exc}")
         raise self.retry(exc=exc)
 
 @celery_app.task(name="test_task")
